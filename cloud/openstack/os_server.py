@@ -412,7 +412,7 @@ def main():
             ['image', 'root_volume'],
         ],
     )
-    module = AnsibleModule(argument_spec, **module_kwargs)
+    module = AnsibleModule(_align_with_2(argument_spec), **module_kwargs)
 
     if not HAS_SHADE:
         module.fail_json(msg='shade is required for this module')
@@ -448,6 +448,23 @@ def main():
             _delete_server(module, cloud)
     except shade.OpenStackCloudException as e:
         module.fail_json(msg=e.message, extra_data=e.extra_data)
+
+
+def _align_with_2(argument_spec):
+    # Remove this as soon as 2.0 has been released
+    if 'auth_type' not in augument_spec:
+        # auth_type was added in 2.0, so it's a good marker to look for
+        # so that we only modify argument spec for modules using 1.9 ansible
+        del argument_spec['auth_plugin']
+        del argument_spec['auth_token']
+        argument_spec['auth_type'] = dict(default=None)
+        argument_spec['verify'] = dict(default=True, aliases=['validate_certs'])
+        argument_spec['cacert'] = dict(default=None)
+        argument_spec['cert'] = dict(default=None)
+        argument_spec['key'] = dict(default=None)
+        argument_spec['api_timeout'] = dict(default=None, type='int')
+        argument_spec['endpoint_type'] = dict(
+            default='public', choices=['public', 'internal', 'admin'])
 
 # this is magic, see lib/ansible/module_common.py
 from ansible.module_utils.basic import *
