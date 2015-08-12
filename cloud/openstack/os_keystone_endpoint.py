@@ -99,7 +99,7 @@ EXAMPLES = '''
 
 
 def main():
-    argument_spec = openstack_argument_spec()
+    argument_spec = openstack_full_argument_spec()
     argument_spec.update(dict(
         service_name=dict(),
         service_id=dict(),
@@ -112,7 +112,7 @@ def main():
     module = AnsibleModule(
         argument_spec=argument_spec,
         mutually_exclusive=[['service_name', 'service_id']],
-        required_one_of=['service_name', 'service_id']
+        required_one_of=[['service_name', 'service_id']]
     )
 
     if not HAS_SHADE:
@@ -133,14 +133,14 @@ def main():
 
         # Determine service id
         if service_id is None:
-            service = cloud.get_service(service_name_or_id=service_name)
+            service = cloud.get_service(name_or_id=service_name)
             service_id = service.id
 
         endpoint_kwargs = dict(
-            service_name_or_id=service_id,
-            public_url=public_url,
-            internal_url=internal_url,
-            admin_url=admin_url,
+            service_id=service_id,
+            publicurl=public_url,
+            internalurl=internal_url,
+            adminurl=admin_url,
             region=region)
 
         endpoints = cloud.search_endpoints(filters=endpoint_kwargs)
@@ -154,7 +154,10 @@ def main():
                 if module.check_mode:
                     module.exit_json(changed=True)
 
-                new_endpoint = cloud.create_endpoint(**endpoint_kwargs)
+                new_endpoint = cloud.create_endpoint(
+                    service_name_or_id=service_id, public_url=public_url,
+                    internal_url=internal_url, admin_url=admin_url,
+                    region=region)
                 module.exit_json(changed=True,
                                  result='created',
                                  id=new_endpoint['id'])
