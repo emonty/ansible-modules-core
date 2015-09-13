@@ -122,8 +122,8 @@ def main():
         tags = dict(required=False, type='list', default=None),
         wait = dict(required=False, default=True, type='bool'),
         timeout = dict(required=False, default=120, type='int'),
-        state = dict(default='present', choices=['absent', 'present'])
-    ))
+        state = dict(default='present', choices=['absent', 'present']),
+    )
     module_kwargs = openstack_module_kwargs(
         mutually_exclusive=[
             ['template_file', 'template_url']
@@ -189,7 +189,7 @@ def main():
                 found_stack.get()
                 _stack_dict = found_stack.to_dict()
 
-                stack_template = heat.stacks.template(found_stack.identifier))
+                stack_template = heat.stacks.template(found_stack.identifier)
                 changed = False
                 if cmp(template, stack_template) != 0:
                     # TODO: This should check for more than just template
