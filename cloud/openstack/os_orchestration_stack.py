@@ -16,16 +16,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this software.  If not, see <http://www.gnu.org/licenses/>.
 
+import json
 import os
 import time
 try:
-    from keystoneclient.v2_0 import client as ksclient
-    from heatclient import client as client
-    from heatclient.v1.stacks import StackManager
+    import shade
+    from shade import meta
     import yaml
-    import json
     HAVE_DEPS = True
-except ImportError, e:
+except ImportError:
     HAVE_DEPS = False
 
 DOCUMENTATION = '''
@@ -74,8 +73,7 @@ options:
     default: present
 requirements: 
     - "python >= 2.6"
-    - "python-keystoneclient"
-    - "python-heatclient"
+    - "shade"
     - "yaml"
 '''
 
@@ -99,50 +97,7 @@ info:
     type: dict
 '''
 
-_os_keystone = None
-_os_tenant_id = None
-
-# Shade does not support Heat yet
-def _get_ksclient(module, kwargs):
-    try:
-        kclient = ksclient.Client(username=kwargs['login_username'],
-                                  password=kwargs['login_password'],
-                                  tenant_name=kwargs['login_tenant_name'],
-                                  auth_url=kwargs['auth_url'])
-    except Exception, e:
-        module.fail_json(msg = "Error authenticating to the keystone: %s" %e.message)
-    global _os_keystone
-    _os_keystone = kclient
-    return kclient
-
-
-def _set_tenant_id(module):
-    global _os_tenant_id
-    if 'login_tenant_id' in module.params and module.params['login_tenant_id']:
-        _os_tenant_id = module.params['login_tenant_id']
-        return
-    
-    tenant_name = module.params['login_tenant_name']
-
-    _os_tenant_id = os.environ.get('OS_TENANT_ID', None)        
-    if _os_tenant_id != None:
-        return _os_tenant_id
-    
-    for tenant in _os_keystone.tenants.list():
-        if tenant.name == tenant_name:
-            _os_tenant_id = tenant.id
-            break
-
-    if not _os_tenant_id:
-        module.fail_json(msg = "The tenant id cannot be found, please check the parameters")
         
-def _get_endpoint(module, client, endpoint_type='publicURL'):
-    try:
-        endpoint = client.service_catalog.url_for(service_type='orchestration', endpoint_type=endpoint_type)
-    except Exception, e:
-        module.fail_json(msg="Error getting endpoint for glance: %s" % e.message)
-    return endpoint
-
 def _get_heat_client(module, kwargs):
     try:
         _ksclient = _get_ksclient(module, kwargs)
@@ -161,25 +116,35 @@ def _json_helper(obj):
         return obj.isoformat()
 
 def main():
-    argument_spec = openstack_argument_spec()
-    argument_spec.update(dict(
+    argument_spec = openstack_full_argument_spec(
         login_tenant_id = dict(required=False),
         name = dict(required=True),
         template = dict(required=False, no_log=True),
-        parameters = dict(required=False, type='dict'),
-        tags = dict(required=False, type='str'),
+        parameters = dict(required=False, type='dict', default=None),
+        tags = dict(required=False, type='str', default=None),
         wait = dict(required=False, default=True, type='bool'),
         timeout = dict(required=False, default=120, type='int'),
         state = dict(default='present', choices=['absent', 'present'])
     ))
-
-    module = AnsibleModule(argument_spec)
+    module_kwargs = openstack_module_kwargs(
+        required_if=[
+            ('state', 'present', ['template']),
+        ])
+    module = AnsibleModule(argument_spec, **module_kwargs)
 
     if not HAVE_DEPS:
-        module.fail_json(msg='heatclient, yaml and json is required for this module')
+        module.fail_json(msg='shade is required for this module')
 
     try:
-        heat = _get_heat_client(module, module.params)
+        name = module.params.pop('name')
+        parameters = module.params.pop('parameters')
+        tags = module.params.pop('tags')
+        template_path = module.params.pop('template')
+        state = module.params.pop('state')
+
+        cloud_params = dict(module.params)
+        cloud = shade.openstack_cloud(**cloud_params)
+        heat = cloud.heat_client
         _set_tenant_id(module)
 
         found_stack = None
@@ -189,64 +154,61 @@ def main():
                 found_stack = stack
                 break
             
-        if 'template' in module.params:
-            template = yaml.load(module.params['template'])
-            template_json = json.dumps(template, default=_json_helper)
-
-        parameters = module.params['parameters'] if 'parameters' in module.params else None;
-        tags = module.params['tags'] if 'tags' in module.params else None;
-            
-        if module.params['state'] == 'present' and found_stack == None:
-            _stack = heat.stacks.create(tenant_id=_os_tenant_id,
-                                        stack_name=module.params['name'],
-                                        template=module.params['template'],
-                                        parameters=parameters,
-                                        tags=tags)
+        if state == 'present' and not found_stack:
+            _stack = heat.stacks.create(
+                stack_name=stack_name,
+                template=template_path,
+                parameters=parameters,
+                tags=tags)
             found_stack = heat.stacks.get(_stack['stack']['id'])
-            expire = time.time() + int(module.params['timeout'])
             _stack_dict = found_stack.to_dict()
-            while time.time() < expire:
-                if _stack_dict['stack_status'] != 'CREATE_IN_PROGRESS':
-                    break
+            if module.params['wait']:
+                expire = time.time() + module.params['timeout']
+                while time.time() < expire:
+                    if _stack_dict['stack_status'] != 'CREATE_IN_PROGRESS':
+                        break
 
-                time.sleep(2)
-                found_stack = heat.stacks.get(_stack['stack']['id'])
-                _stack_dict = found_stack.to_dict()
+                    time.sleep(2)
+                    found_stack = heat.stacks.get(_stack['stack']['id'])
+                    _stack_dict = found_stack.to_dict()
             module.exit_json(changed=True, info=_stack_dict)
             
-        if module.params['state'] == 'present' and found_stack != None:
+        if state == 'present' and found_stack:
             
+            template = yaml.load(template_path)
+            template_json = json.dumps(template, default=_json_helper)
+
             found_stack.get()
             _stack_dict = found_stack.to_dict()
             
-            stack_template = json.dumps(heat.stacks.template(found_stack.identifier))
+            stack_template = json.dumps(heat.stacks.template(
+                found_stack.identifier))
             changed = False
             if stack_template != template_json:
                 changed = True
                 
             if changed:
                 _stack = heat.stacks.update(found_stack.identifier,
-                                            tenant_id=_os_tenant_id,
-                                            stack_name=module.params['name'],
-                                            template=module.params['template'],
+                                            stack_name=stack_name,
+                                            template=template_path,
                                             parameters=parameters,
                                             tags=tags)
                 found_stack = heat.stacks.get(found_stack.identifier)
-                
                 _stack_dict = found_stack.to_dict()
-                expire = time.time() + int(module.params['timeout'])
-                while time.time() < expire:
-                    if _stack_dict['stack_status'] != 'UPDATE_IN_PROGRESS':
-                        break
+                if module.params['wait']:
+                    expire = time.time() + module.params['timeout']
+                    while time.time() < expire:
+                        if _stack_dict['stack_status'] != 'UPDATE_IN_PROGRESS':
+                            break
 
-                    time.sleep(2)
-                    found_stack = heat.stacks.get(found_stack.identifier)
-                    _stack_dict = found_stack.to_dict()
+                        time.sleep(2)
+                        found_stack = heat.stacks.get(found_stack.identifier)
+                        _stack_dict = found_stack.to_dict()
 
                 module.exit_json(changed=changed, info=_stack_dict)
             module.exit_json(changed=changed, info=_stack_dict)
 
-        if module.params['state'] != 'present' and found_stack != None:
+        if state != 'present' and found_stack:
             heat.stacks.delete(found_stack.identifier)
             module.exit_json(changed=True)
 
