@@ -120,7 +120,7 @@ user:
             sample: "demouser"
 '''
 
-def _needs_update(module, user):
+def _needs_update(module, user, password):
     keys = ('email', 'default_project', 'domain', 'enabled')
     for key in keys:
         if module.params[key] is not None and module.params[key] != user.get(key):
@@ -128,7 +128,7 @@ def _needs_update(module, user):
 
     # We don't get password back in the user object, so assume any supplied
     # password is a change.
-    if module.params['password'] is not None:
+    if password is not None:
         return True
 
     return False
@@ -154,7 +154,8 @@ def main():
         module.fail_json(msg='shade is required for this module')
 
     name = module.params['name']
-    password = module.params['password']
+    # pop the password so as not to impact the shade constructor
+    password = module.pop('password')
     email = module.params['email']
     default_project = module.params['default_project']
     domain = module.params['domain']
@@ -196,7 +197,7 @@ def main():
                     enabled=enabled)
                 changed = True
             else:
-                if _needs_update(module, user):
+                if _needs_update(module, user, password):
                     user = cloud.update_user(
                         user['id'], password=password, email=email,
                         default_project=project_id, domain_id=domain,
