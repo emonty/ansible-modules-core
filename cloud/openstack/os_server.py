@@ -440,7 +440,6 @@ def _create_server(module, cloud):
     flavor = module.params['flavor']
     flavor_ram = module.params['flavor_ram']
     flavor_include = module.params['flavor_include']
-    reuse_fips = module.params['reuse_fips']
 
     image_id = None
     if not module.params['boot_volume']:
